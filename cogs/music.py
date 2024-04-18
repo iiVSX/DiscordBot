@@ -33,10 +33,7 @@ class PlayButton(discord.ui.Button):
             self.view.play_song(interaction)
 
         self.set_emoji(interaction.guild)
-        MusicPlayer.set_embed_title(interaction.guild)
-        MusicPlayer.set_embed_author(interaction.user)
-        MusicPlayer.set_embed_attributes(interaction.user)
-        await interaction.response.edit_message(embed=MusicPlayer.embed, view=self.view)
+        await interaction.response.edit_message(embed=MusicPlayer.get_embed(interaction.user, interaction.guild), view=self.view)
 
 
 class SkipButton(discord.ui.Button):
@@ -55,57 +52,77 @@ class SkipButton(discord.ui.Button):
 
 
 class RepeatButton(discord.ui.Button):
-    def __init__(self):
+    def __init__(self, guild: discord.Guild):
         super().__init__(row=0)
-        self.set_emoji()
+        self.set_emoji(guild)
 
-    def set_emoji(self):
-        self.emoji = MusicPlayer.repeat_dict.get(MusicPlayer.repeat)
+    def set_emoji(self, guild: discord.Guild):
+        self.emoji = MusicPlayer.repeat_dict.get(MusicPlayer.data[guild.id]['repeat'])
 
     async def interaction_check(self, interaction: discord.Interaction):
         return await self.view.interaction_check(interaction)
     
     async def callback(self, interaction: discord.Interaction):
-        MusicPlayer.repeat = (MusicPlayer.repeat + 1) % 3
+        MusicPlayer.data[interaction.guild.id]['repeat'] = (MusicPlayer.data[interaction.guild.id]['repeat'] + 1) % 3
 
-        self.set_emoji()
-        MusicPlayer.set_embed_author(interaction.user)
-        MusicPlayer.set_embed_attributes(interaction.user)
-        await interaction.response.edit_message(embed=MusicPlayer.embed, view=self.view)
+        self.set_emoji(interaction.guild)
+        await interaction.response.edit_message(embed=MusicPlayer.get_embed(interaction.user, interaction.guild), view=self.view)
 
 
-class SearchModal(discord.ui.Modal):
-    keyword = discord.ui.TextInput(
-        label='검색어',
-        placeholder='검색어를 입력해요',
-        required=False,
-        row=0
-    )
-    url = discord.ui.TextInput(
-        label='URL',
-        placeholder='URL을 입력해요',
-        required=False,
-        row=1
-    )
+class VolumeButton(discord.ui.Button):
+    def __init__(self, guild: discord.Guild):
+        super().__init__(row=0)
+        self.set_emoji(guild)
 
-    def __init__(self):
-        super().__init__(title='노래 가져오기 🎹🔍')
+    def set_emoji(self, guild: discord.Guild):
+        volume = MusicPlayer.data[guild.id]['volume']
+        if volume < 0:
+            print('[VolumeButton:set_emoji] volume < 0')
+        else:
+            if volume == 0:
+                self.emoji = '🔇'
+            elif volume <= 0.25:
+                self.emoji = '🔉'
+            elif volume <= 0.5:
+                self.emoji = '🔊'
+            else:
+                print('[VolumeButton:set_emoji] volume > 0.5')
 
     async def interaction_check(self, interaction: discord.Interaction):
-        return len(self.keyword.value) or len(self.url.value)
+        return await self.view.interaction_check(interaction)
+    
+    async def callback(self, interaction: discord.Interaction):
+        await interaction.response.send_modal(VolumeModal(self))
+
+
+class VolumeModal(discord.ui.Modal):
+    def __init__(self, volume_button: VolumeButton):
+        super().__init__(title='음량 조절하기 🔈')
+        self.vb = volume_button
+        volume = discord.ui.TextInput(
+            label='음량',
+            placeholder='0에서 200 사이의 정수를 입력해요',
+            required=True,
+            row=0
+        )
+        self.add_item(volume)
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        try:
+            volume = int(self.children[0].value)
+            return 0 <= volume <= 200
+        except Exception:
+            return False
 
     async def on_submit(self, interaction: discord.Interaction):
         await interaction.response.defer()
-        if len(self.keyword.value):
-            await MusicPlayer.load_yt_search_info(interaction, self.keyword.value)
-        if len(self.url.value):
-            query_str_dict = parse.parse_qs(parse.urlparse(self.url.value).query)
-            if 'list' in query_str_dict:
-                await MusicPlayer.load_yt_playlist_info(interaction, query_str_dict.get('list')[0])
-            elif 'v' in query_str_dict:
-                await MusicPlayer.load_yt_song_info(interaction, query_str_dict.get('v')[0])
-            else:
-                print('SearchModal:on_submit: invalid youtube url')
+        volume = int(self.children[0].value) / 400
+        MusicPlayer.data[interaction.guild.id]['volume'] = volume
+        if interaction.guild.voice_client is not None and interaction.guild.voice_client.is_connected():
+            if interaction.guild.voice_client.is_playing() or interaction.guild.voice_client.is_paused():
+                interaction.guild.voice_client.source.volume = volume
+        self.vb.set_emoji(interaction.guild)
+        await interaction.edit_original_response(embed=MusicPlayer.get_embed(interaction.user, interaction.guild), view=self.vb.view)
 
 
 class SearchButton(discord.ui.Button):
@@ -117,20 +134,52 @@ class SearchButton(discord.ui.Button):
     
     async def callback(self, interaction: discord.Interaction):
         await interaction.response.send_modal(SearchModal())
-        MusicPlayer.set_embed_author(interaction.user)
-        MusicPlayer.set_embed_attributes(interaction.user)
-        await interaction.edit_original_response(embed=MusicPlayer.embed)
-        print(2)
+        await interaction.edit_original_response(embed=MusicPlayer.get_embed(interaction.user, interaction.guild))
+
+
+class SearchModal(discord.ui.Modal):
+    def __init__(self):
+        super().__init__(title='노래 가져오기 🎹')
+        keyword = discord.ui.TextInput(
+            label='검색어',
+            placeholder='검색어를 입력해요',
+            required=False,
+            row=0
+        )
+        url = discord.ui.TextInput(
+            label='URL',
+            placeholder='URL을 입력해요',
+            required=False,
+            row=1
+        )
+        self.add_item(keyword)
+        self.add_item(url)
+
+    async def interaction_check(self, interaction: discord.Interaction):
+        return len(self.children[0].value) or len(self.children[1].value)
+
+    async def on_submit(self, interaction: discord.Interaction):
+        await interaction.response.defer()
+
+        if len(self.children[0].value):
+            await MusicPlayer.load_yt_search_info(interaction, self.children[0].value)
+        if len(self.children[1].value):
+            query_str_dict = parse.parse_qs(parse.urlparse(self.children[1].value).query)
+            if 'list' in query_str_dict:
+                await MusicPlayer.load_yt_playlist_info(interaction, query_str_dict.get('list')[0])
+            elif 'v' in query_str_dict:
+                await MusicPlayer.load_yt_song_info(interaction, query_str_dict.get('v')[0])
+            else:
+                print('SearchModal:on_submit: invalid youtube url')
 
 
 class MusicPlayer(discord.ui.View):
-    history: list[dict[str, str | int]] = []
+    history: dict[str, dict[str, str | int]] = {}
     playlist: list[dict[str, str | int]] = []
-    cmd_msg: discord.Message
     sended_msg: discord.Message = None
     volume = 0.1
     repeat = 0
-    repeat_dict = {0: '⏯️', 1: '🔁', 2: '🔂'}
+    repeat_dict = {0: '➡️', 1: '🔁', 2: '🔂'}
     embed: discord.Embed = discord.Embed(color=discord.Color.blurple())
     ytdlp = yt_dlp.YoutubeDL({
         'format': 'bestaudio/best',
@@ -144,79 +193,85 @@ class MusicPlayer(discord.ui.View):
         'extract_flat': True,
         'skip_download': True,
     })
+    data: dict[int, dict[str, int | float | list[dict[str, str | int]] | discord.Message]] = {}
     embed_batch_size = 10
     index_emoji_dict = {'1️⃣': 0, '2️⃣': 1, '3️⃣': 2, '4️⃣': 3, '5️⃣': 4, '6️⃣': 5, '7️⃣': 6, '8️⃣': 7, '9️⃣': 8, '🔟': 9}
     def __init__(self):
         super().__init__(timeout=None)
 
     @classmethod
-    def set_embed_title(cls, guild: discord.Guild):
+    def get_embed(cls, user: discord.User | discord.Member, guild: discord.Guild):
+        embed = discord.Embed(color=discord.Color.blurple())
+        playlist = cls.data[guild.id]['playlist']
+
         if guild.voice_client is not None and guild.voice_client.is_connected():
             if guild.voice_client.is_playing():
-                cls.embed.title = '▶️  재생 중'
+                embed.title = '▶️  재생 중'
             elif guild.voice_client.is_paused():
-                cls.embed.title = '⏸️  일시 정지'
+                embed.title = '⏸️  일시 정지'
             else:
-                cls.embed.title = '⏹️  대기 중'
+                embed.title = '⏹️  대기 중'
         else:
-            cls.embed.title = '⏹️  대기 중'
+            embed.title = '⏹️  대기 중'
 
-        cls.embed.title = cls.embed.title + f'  -  음량 {int(cls.volume * 100)}%'
+        embed.title += f'  -  음량 {int(cls.data[guild.id]['volume'] * 400)}%'
+        embed.add_field(name='', value='', inline=False)
 
-    @classmethod
-    def set_embed_author(cls, author: discord.User | discord.Member):
-        cls.embed.set_footer(text=author, icon_url=author.display_avatar.url)
+        if playlist:
+            embed.description = f'[{playlist[0]['title']}]({playlist[0]['url']}) [{cls.convert_seconds(playlist[0]['length'])}]\n\n{playlist[0].get('artist') if 'artist' in playlist[0] else ''}'
+            embed.set_thumbnail(url=playlist[0]['thumbnail'])
 
-    @classmethod
-    def set_embed_attributes(cls, author: discord.User | discord.Member):
-        cls.embed.clear_fields()
-        cls.embed.add_field(name='', value='', inline=False)
-
-        if cls.playlist:
-            cls.embed.set_thumbnail(url=cls.playlist[0]['thumbnail'])
-            cls.embed.description = f'[{cls.playlist[0]['title']}]({cls.playlist[0]['url']}) [{cls.convert_seconds(cls.playlist[0]['length'])}]\n\n{cls.playlist[0].get('artist') if 'artist' in cls.playlist[0] else ''}'
-
-            for i in range(0, len(cls.playlist), cls.embed_batch_size):
-                cls.embed.add_field(
+            for i in range(0, len(playlist), cls.embed_batch_size):
+                embed.add_field(
                     name='[Playlist]' if i == 0 else '',
-                    value='\n'.join([f'{i + j + 1}. [{song.get("title")}]({song.get("url")}) [{cls.convert_seconds(song.get("length"))}]' for j, song in enumerate(cls.playlist[i:min(i + cls.embed_batch_size, len(cls.playlist))])]),
+                    value='\n'.join([f'{i + j + 1}. [{song.get("title")}]({song.get("url")}) [{cls.convert_seconds(song.get("length"))}]' for j, song in enumerate(playlist[i:min(i + cls.embed_batch_size, len(playlist))])]),
                     inline=False
                 )
         else:
-            cls.embed.set_thumbnail(url=author.display_avatar.url)
-            cls.embed.description = '재생할 수 있는 노래가 없어요 ㅠ-ㅠ\n\n플레이리스트에 노래를 추가해야 해요'
-            cls.embed.add_field(name='[Playlist]', value='비어있어요...', inline=False)
+            embed.description = '재생할 수 있는 노래가 없어요 :(\n\n플레이리스트에 노래를 넣어야 해요'
+            embed.set_thumbnail(url=user.display_avatar.url)
+            embed.add_field(name='[Playlist]', value='비어있어요...', inline=False)
+
+        embed.set_footer(text=user, icon_url=user.display_avatar.url)
+
+        return embed
 
     @classmethod
     async def from_message(cls, message: discord.Message):
-        if cls.sended_msg is not None:
-            await cls.sended_msg.delete()
-        cls.cmd_msg = message
         music_player = cls()
+        if cls.data.get(message.guild.id) is None:
+            cls.data[message.guild.id] = {
+                'playlist': [],
+                'volume': 0.1,
+                'repeat': 0,
+            }
+        else:
+            asyncio.run_coroutine_threadsafe(cls.data[message.guild.id]['message'].delete(), Music.bot.loop)
+
         play_button = PlayButton(message.guild)
         skip_button = SkipButton()
-        repeat_button = RepeatButton()
+        repeat_button = RepeatButton(message.guild)
         search_button = SearchButton()
+        volume_button = VolumeButton(message.guild)
         music_player.add_item(play_button)
         music_player.add_item(skip_button)
         music_player.add_item(repeat_button)
         music_player.add_item(search_button)
-        MusicPlayer.set_embed_author(message.author)
-        MusicPlayer.set_embed_title(message.guild)
-        MusicPlayer.set_embed_attributes(message.author)
-        cls.sended_msg = await message.channel.send(embed=MusicPlayer.embed, view=music_player)
+        music_player.add_item(volume_button)
+        cls.data[message.guild.id]['message'] = await message.channel.send(embed=cls.get_embed(message.author, message.guild), view=music_player)
         return music_player
 
     def play_song(self, interaction: discord.Interaction):
-        if MusicPlayer.playlist:
+        playlist = MusicPlayer.data[interaction.guild.id]['playlist']
+        if playlist:
             interaction.guild.voice_client.play(
                 source=discord.PCMVolumeTransformer(
                     original=discord.FFmpegPCMAudio(
-                        source=MusicPlayer.playlist[0]['source'],
+                        source=playlist[0]['source'],
                         before_options='-reconnect 1 -reconnect_streamed 1 -reconnect_delay_max 5',
                         options='-vn',
                     ),
-                    volume=MusicPlayer.volume,
+                    volume=MusicPlayer.data[interaction.guild.id]['volume'],
                 ),
                 after=lambda e: self.play_after(e, interaction),
                 bitrate=512,
@@ -224,33 +279,29 @@ class MusicPlayer(discord.ui.View):
                 signal_type='music',
             )
         else:
-            print('play_song: MusicPlayer.playlist is empty')
+            print('play_song: playlist is empty')
 
         self.children[0].set_emoji(interaction.guild)
-        MusicPlayer.set_embed_title(interaction.guild)
-        MusicPlayer.set_embed_attributes(interaction.user)
-        MusicPlayer.set_embed_author(interaction.user)
-        asyncio.run_coroutine_threadsafe(MusicPlayer.sended_msg.edit(embed=MusicPlayer.embed, view=self), Music.bot.loop)
+        asyncio.run_coroutine_threadsafe(interaction.edit_original_response(embed=MusicPlayer.get_embed(interaction.user, interaction.guild), view=self), Music.bot.loop)
 
     def play_after(self, error: Exception | None, interaction: discord.Interaction):
+        playlist = MusicPlayer.data[interaction.guild.id]['playlist']
+        repeat = MusicPlayer.data[interaction.guild.id]['repeat']
         if error:
-            print(f'MusicPlayer:play_after: {error}')
-        if MusicPlayer.playlist:
-            if MusicPlayer.repeat == 0:
-                del MusicPlayer.playlist[0]
-            elif MusicPlayer.repeat == 1 or MusicPlayer.repeat == 2:
-                MusicPlayer.playlist.append(MusicPlayer.playlist.pop(0))
+            print(f'play_after: {error}')
+        if playlist:
+            if repeat == 0:
+                del playlist[0]
+            elif repeat == 1 or repeat == 2:
+                playlist.append(playlist.pop(0))
             else:
-                print('MusicPlayer:play_after: not cls.repeat == 0 and not cls.repeat == 1 and not cls.repeat == 2')
+                print('[play_after] not cls.repeat == 0 and not cls.repeat == 1 and not cls.repeat == 2')
                 
             self.play_song(interaction)
         else:
             self.children[0].set_emoji(interaction.guild)
-            MusicPlayer.set_embed_title(interaction.guild)
-            MusicPlayer.set_embed_attributes(interaction.user)
-            MusicPlayer.set_embed_author(interaction.user)
-            asyncio.run_coroutine_threadsafe(MusicPlayer.sended_msg.edit(embed=MusicPlayer.embed, view=self), Music.bot.loop)
-            print('MusicPlayer:play_after: cls.playlist is empty')
+            asyncio.run_coroutine_threadsafe(interaction.edit_original_response(embed=MusicPlayer.get_embed(interaction.user, interaction.guild), view=self), Music.bot.loop)
+            print('play_after: cls.playlist is empty')
 
     async def interaction_check(self, interaction: discord.Interaction):
         if interaction.user.voice is not None:
@@ -265,22 +316,6 @@ class MusicPlayer(discord.ui.View):
 
         await interaction.response.edit_message(view=self)
         return False
-    
-    @staticmethod
-    def parse_yt_url(url: str):
-        url_dict = parse.parse_qs(parse.urlparse(url).query)
-        if 'list' in url_dict:
-            if url_dict['list']:
-                return url_dict['list'][0]
-            else:
-                print('stream_yt_url: url_dict["list"] is empty')
-        elif 'v' in url_dict:
-            if url_dict['v']:
-                return url_dict['v'][0]
-            else:
-                print('stream_yt_url: url_dict["v"] is empty')
-        else:
-            print('stream_yt_url: url is None')
 
     @classmethod
     async def load_yt_playlist_info(cls, interaction: discord.Interaction, id: str):
@@ -300,13 +335,11 @@ class MusicPlayer(discord.ui.View):
 
     @classmethod
     async def load_yt_song_info(cls, interaction: discord.Interaction, id: str):
-        for song in cls.history:
-            if song.get('id') == id:
-                cls.playlist.append(song)
-                cls.set_embed_author(interaction.user)
-                cls.set_embed_title(interaction.guild)
-                cls.set_embed_attributes(interaction.user)
-                await cls.sended_msg.edit(embed=cls.embed)
+        playlist = MusicPlayer.data[interaction.guild.id]['playlist']
+        song = cls.history.get(id)
+        if song is not None:
+                playlist.append(song)
+                await MusicPlayer.data[interaction.guild.id]['message'].edit(embed=cls.get_embed(interaction.user, interaction.guild))
                 print(f'load_yt_song_info: Append {song.get('title')} in self.history to self.playlist')
                 return
 
@@ -329,12 +362,9 @@ class MusicPlayer(discord.ui.View):
                     song['artist'] = info['artist']
                 else:
                     print('load_yt_song_info: not "artist" in info')
-                cls.history.append(song)
-                cls.playlist.append(song)
-                cls.set_embed_author(interaction.user)
-                cls.set_embed_title(interaction.guild)
-                cls.set_embed_attributes(interaction.user)
-                await cls.sended_msg.edit(embed=cls.embed)
+                cls.history[song['id']] = song
+                playlist.append(song)
+                await MusicPlayer.data[interaction.guild.id]['message'].edit(embed=cls.get_embed(interaction.user, interaction.guild))
             else:
                 print('load_yt_song_info: not "id" or "duration" or "url" or "thumbnail" or "thumbnails" or "title" or "webpage_url" in info')
         else:
@@ -421,6 +451,7 @@ class MusicPlayer(discord.ui.View):
             return f'{hours}:{minutes:02d}:{seconds:02d}'
 
 
+@app_commands.guild_only()
 class Music(commands.GroupCog, name='노래'):
     music_player: MusicPlayer = None
     loop: asyncio.AbstractEventLoop
@@ -448,7 +479,7 @@ class Music(commands.GroupCog, name='노래'):
 
     @app_commands.command(name='상태')
     async def state(self, interaction: discord.Interaction):
-        await interaction.response.defer()
+        await interaction.response.defer(thinking=True)
         ctx = await commands.Context.from_interaction(interaction)
         vc = interaction.guild.voice_client
         g = interaction.guild
@@ -460,30 +491,13 @@ class Music(commands.GroupCog, name='노래'):
         print(f'self.bot.voice_clients: {self.bot.voice_clients}')
         print(f'type(voice_client): {type(ctx.voice_client)}')
         print(f'interaction.user.voice: {ctx.author.voice}')
+        print(f'voice_client.source.volume: {ctx.voice_client.source.volume}')
         print(f'voice_client.channel: {ctx.voice_client.channel}')
         print(f'voice_client.is_connected: {ctx.voice_client.is_connected()}')
         print(f'voice_client.is_paused: {ctx.voice_client.is_paused()}')
         print(f'voice_client.is_playing: {ctx.voice_client.is_playing()}')
         print(f'playlist.count: {MusicPlayer.playlist.count()}')
-
-    @app_commands.command(name='들어와', description='채널에 들어가요')
-    async def join(self, interaction: discord.Interaction):
-        await interaction.user.voice.channel.connect(timeout=1)
-        await interaction.response.send_message('채널에 들어왔어요')
-
-    @app_commands.command(name='나가라', description='채널에서 나가요')
-    async def disconnect(self, interaction: discord.Interaction):
-        await interaction.guild.voice_client.disconnect()
-        await interaction.response.send_message('채널에서 나왔어요')
-
-    @app_commands.command(name='볼륨', description='볼륨을 조절해요')
-    @app_commands.rename(volume='볼륨')
-    @app_commands.describe(volume='기본값은 10% 에요')
-    async def volume(self, interaction: discord.Interaction, volume: int):
-        self.volume = volume / 100
-        source: discord.PCMVolumeTransformer = Music.voice_client.source
-        source.volume = volume / 100
-        await interaction.response.send_message(f'볼륨은 {int(self.volume * 100)}% 에요')
+        await interaction.delete_original_response()
 
 
 async def setup(bot: commands.Bot):

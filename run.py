@@ -16,8 +16,8 @@ class NLPBot(commands.Bot):
             await self.load_extension(f'cogs.{cog}')
 
         self.tree.copy_global_to(guild=TEST_GUILD_ID_1)
-        await self.tree.sync(guild=TEST_GUILD_ID_1)
         self.tree.copy_global_to(guild=TEST_GUILD_ID_2)
+        await self.tree.sync(guild=TEST_GUILD_ID_1)
         await self.tree.sync(guild=TEST_GUILD_ID_2)
 
     async def on_ready(self):
