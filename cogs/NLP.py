@@ -4,8 +4,6 @@ import discord
 from discord import app_commands
 from discord.ext import commands
 
-from ..config import url
-
 
 @app_commands.guild_only()
 class NLP(commands.GroupCog, name='자연어처리'):
@@ -22,6 +20,7 @@ class NLP(commands.GroupCog, name='자연어처리'):
                     await message.reply(self.label_dict[label])
     
     async def get_label(self, message_content: str):
+        url = 'http://www.example.com?message='
         async with aiohttp.ClientSession() as session:
             async with session.get(url + message_content) as response:
                 return int(response)
