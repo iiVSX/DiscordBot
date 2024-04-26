@@ -267,7 +267,7 @@ class MusicPlayer(discord.ui.View):
 
     async def volume_btn_callback(self, interaction: discord.Interaction):     
         volume_modal = discord.ui.Modal(title='음량 조절하기 🔈')
-        volume_modal.add_item(discord.ui.TextInput(label='음량', placeholder='0에서 200 사이의 정수를 입력해요', required=True, row=0))
+        volume_modal.add_item(discord.ui.TextInput(label='음량', placeholder='0 이상 200 이하의 정수를 입력해요', required=True, row=0))
         volume_modal.interaction_check = self.volume_modal_interaction_check
         volume_modal.on_submit = self.volume_modal_on_submit
         asyncio.run_coroutine_threadsafe(interaction.response.send_modal(volume_modal), self.bot.loop)

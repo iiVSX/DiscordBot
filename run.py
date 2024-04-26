@@ -6,7 +6,7 @@ from discord.ext import commands
 import config
 
 
-TEST_GUILD_ID_LIST = [discord.Object(id=1202849468681289728), discord.Object(id=1229731635730059325)]
+TEST_GUILD_ID_LIST = [discord.Object(id=1202849468681289728), discord.Object(id=1229731635730059325), discord.Object(id=553237519991570453)]
 
 
 class NLPBot(commands.Bot):

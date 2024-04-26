@@ -1,8 +1,10 @@
-import random
+import aiohttp
 
 import discord
 from discord import app_commands
 from discord.ext import commands
+
+from ..config import url
 
 
 @app_commands.guild_only()
@@ -15,13 +17,14 @@ class NLP(commands.GroupCog, name='자연어처리'):
     async def on_message(self, message: discord.Message):
         if self.bot.data[message.guild.id]['NLP']:
             if not message.author.bot:
-                label = self.NLP(message.content)
+                label = await self.get_label(message.content)
                 if label != 0:
                     await message.reply(self.label_dict[label])
     
-    def NLP(self, message_content: str):
-        rand = random.randrange(0, 5)
-        return rand
+    async def get_label(self, message_content: str):
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url + message_content) as response:
+                return int(response)
 
     @app_commands.command(name='켜기', description='자연어 처리 기능을 켜요')
     async def turn_on(self, interaction: discord.Interaction):
